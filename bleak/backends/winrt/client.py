@@ -5,9 +5,9 @@ BLE Client for Windows 10 systems, implemented with WinRT.
 Created on 2020-08-19 by hbldh <henrik.blidh@nedomkull.com>
 """
 
+import asyncio
 import inspect
 import logging
-import asyncio
 import uuid
 from functools import wraps
 from typing import Callable, Any, List, Optional, Sequence, Union
@@ -38,17 +38,15 @@ from bleak_winrt.windows.devices.enumeration import (
 from bleak_winrt.windows.foundation import EventRegistrationToken
 from bleak_winrt.windows.storage.streams import Buffer
 
-from bleak.backends.device import BLEDevice
-from bleak.backends.winrt.scanner import BleakScannerWinRT
-from bleak.exc import BleakError, PROTOCOL_ERROR_CODES
-from bleak.backends.client import BaseBleakClient
-
 from bleak.backends.characteristic import BleakGATTCharacteristic
+from bleak.backends.client import BaseBleakClient
+from bleak.backends.device import BLEDevice
 from bleak.backends.service import BleakGATTServiceCollection
-from bleak.backends.winrt.service import BleakGATTServiceWinRT
 from bleak.backends.winrt.characteristic import BleakGATTCharacteristicWinRT
 from bleak.backends.winrt.descriptor import BleakGATTDescriptorWinRT
-
+from bleak.backends.winrt.scanner import BleakScannerWinRT
+from bleak.backends.winrt.service import BleakGATTServiceWinRT
+from bleak.exc import BleakError, PROTOCOL_ERROR_CODES
 
 logger = logging.getLogger(__name__)
 
@@ -63,12 +61,12 @@ _pairing_statuses = {
     if "_" not in v and isinstance(getattr(DevicePairingResultStatus, v), int)
 }
 
-
 _unpairing_statuses = {
     getattr(DeviceUnpairingResultStatus, v): v
     for v in dir(DeviceUnpairingResultStatus)
     if "_" not in v and isinstance(getattr(DeviceUnpairingResultStatus, v), int)
 }
+
 
 # TODO: we can use this when minimum Python is 3.8
 # class _Result(typing.Protocol):
@@ -132,11 +130,14 @@ class BleakClientWinRT(BaseBleakClient):
         self._session_active_events: List[asyncio.Event] = []
         self._session_closed_events: List[asyncio.Event] = []
         self._session: GattSession = None
+        # Is paired sometimes is reset to False when actually is paired in windows backend
+        self._device_information = None
+        self.is_paired = False
 
         self._address_type = (
             kwargs["address_type"]
             if "address_type" in kwargs
-            and kwargs["address_type"] in ("public", "random")
+               and kwargs["address_type"] in ("public", "random")
             else None
         )
 
@@ -185,10 +186,15 @@ class BleakClientWinRT(BaseBleakClient):
             )
         self._requester = await BluetoothLEDevice.from_bluetooth_address_async(*args)
 
+        # Get the device information from the requester to actually be able to unpair a device when
+        # a disconnection handler is called (but device is still available)
+        self._device_information = self._requester.device_information
+
         if self._requester is None:
             # https://github.com/microsoft/Windows-universal-samples/issues/1089#issuecomment-487586755
             raise BleakError(
-                f"Failed to connect to {self._device_info}. If the device requires pairing, then pair first. If the device uses a random address, it may have changed."
+                f"Failed to connect to {self._device_info}. If the device requires pairing, then pair first. "
+                f"If the device uses a random address, it may have changed."
             )
 
         # Called on disconnect event or on failure to connect.
@@ -241,39 +247,48 @@ class BleakClientWinRT(BaseBleakClient):
             loop.call_soon_threadsafe(handle_session_status_changed, args)
 
         # Start a GATT Session to connect
-        event = asyncio.Event()
-        self._session_active_events.append(event)
-        try:
-            self._session = await GattSession.from_device_id_async(
-                self._requester.bluetooth_device_id
-            )
-
-            if not self._session.can_maintain_connection:
-                raise BleakError("device does not support GATT sessions")
-
-            self._session_status_changed_token = (
-                self._session.add_session_status_changed(
-                    session_status_changed_event_handler
+        # Several attempts due to some problems getting GattSessions in BGX BLE modules
+        for _ in range(3):
+            event = asyncio.Event()
+            self._session_active_events.append(event)
+            try:
+                logger.debug("Trying to get sessions")
+                self._session = await GattSession.from_device_id_async(
+                    self._requester.bluetooth_device_id
                 )
-            )
 
-            # Windows does not support explicitly connecting to a device.
-            # Instead it has the concept of a GATT session that is owned
-            # by the calling program.
-            self._session.maintain_connection = True
-            # This keeps the device connected until we set maintain_connection = False.
+                if not self._session.can_maintain_connection:
+                    raise BleakError("device does not support GATT sessions")
 
-            # wait for the session to become active
-            await asyncio.wait_for(event.wait(), timeout=timeout)
-        except BaseException:
-            handle_disconnect()
-            raise
-        finally:
-            self._session_active_events.remove(event)
+                self._session_status_changed_token = (
+                    self._session.add_session_status_changed(
+                        session_status_changed_event_handler
+                    )
+                )
 
-        # Obtain services, which also leads to connection being established.
-        await self.get_services()
+                # Windows does not support explicitly connecting to a device.
+                # Instead it has the concept of a GATT session that is owned
+                # by the calling program.
+                self._session.maintain_connection = True
+                # This keeps the device connected until we set maintain_connection = False.
 
+            except BaseException as e:
+                handle_disconnect()
+                logger.warning(f"BaseException raised trying to get sessions: {e}")
+                raise
+            finally:
+                self._session_active_events.remove(event)
+
+                # Obtain services, which also leads to connection being established.
+                try:
+                    await self.get_services()
+                except Exception as e:
+                    logging.warning(f"Exception raised getting services: {e}")
+                if self.services.services:
+                    logger.debug(self.services.services)
+                    break
+                else:
+                    logger.debug("No session received, trying again")
         return True
 
     async def disconnect(self) -> bool:
@@ -350,15 +365,17 @@ class BleakClientWinRT(BaseBleakClient):
             Boolean regarding success of pairing.
 
         """
-
+        # Update device_information
+        if self._requester:
+            self._device_information = self._requester.device_information
         if (
-            self._requester.device_information.pairing.can_pair
-            and not self._requester.device_information.pairing.is_paired
+            self._device_information.pairing.can_pair
+            and not self._device_information.pairing.is_paired
         ):
 
             # Currently only supporting Just Works solutions...
             ceremony = DevicePairingKinds.CONFIRM_ONLY
-            custom_pairing = self._requester.device_information.pairing.custom
+            custom_pairing = self._device_information.pairing.custom
 
             def handler(sender, args):
                 args.accept()
@@ -393,9 +410,11 @@ class BleakClientWinRT(BaseBleakClient):
                         pairing_result.protection_level_used
                     )
                 )
+                self.is_paired = True
                 return True
         else:
-            return self._requester.device_information.pairing.is_paired
+            self.is_paired = True
+            return self._device_information.pairing.is_paired
 
     async def unpair(self) -> bool:
         """Attempts to unpair from the device.
@@ -406,10 +425,14 @@ class BleakClientWinRT(BaseBleakClient):
             Boolean on whether the unparing was successful.
 
         """
-
-        if self._requester.device_information.pairing.is_paired:
+        # Update device_information
+        if self._requester:
+            self._device_information = self._requester.device_information
+        # Using custom is_paired to avoid the issue where the device information returns a False in
+        # _is_pairing attribute but the device is paired in windows
+        if self.is_paired:
             unpairing_result = (
-                await self._requester.device_information.pairing.unpair_async()
+                await self._device_information.pairing.unpair_async()
             )
 
             if unpairing_result.status not in (
@@ -425,8 +448,9 @@ class BleakClientWinRT(BaseBleakClient):
             else:
                 logger.info("Unpaired with device.")
                 return True
-
-        return not self._requester.device_information.pairing.is_paired
+        else:
+            logger.warning("Bleak is saying that the device is not pair, pretty weird")
+        return not self._device_information.pairing.is_paired
 
     # GATT services methods
 

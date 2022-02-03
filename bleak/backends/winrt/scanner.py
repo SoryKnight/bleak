@@ -98,7 +98,10 @@ class BleakScannerWinRT(BaseBleakScanner):
         else:
             raw_data = _RawAdvData(event_args, raw_data.scan)
 
-        self._discovered_devices[event_args.bluetooth_address] = raw_data
+        # Only stores devices with local_names (solve the bug where a device is scanned twice
+        # with and without local_name but is stored without local_name)
+        if event_args.advertisement.local_name:
+            self._discovered_devices[event_args.bluetooth_address] = raw_data
 
         if self._callback is None:
             return
@@ -237,8 +240,7 @@ class BleakScannerWinRT(BaseBleakScanner):
                 uuids.append(str(u))
             for m in args.advertisement.manufacturer_data:
                 data[m.company_id] = bytes(m.data)
-            # local name is empty string rather than None if not present
-            if args.advertisement.local_name:
+            if args.advertisement.local_name is not None:
                 local_name = args.advertisement.local_name
             rssi = args.raw_signal_strength_in_d_bm
 
