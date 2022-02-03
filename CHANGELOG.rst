@@ -7,10 +7,21 @@ All notable changes to this project will be documented in this file.
 The format is based on `Keep a Changelog <https://keepachangelog.com/en/1.0.0/>`_,
 and this project adheres to `Semantic Versioning <https://semver.org/spec/v2.0.0.html>`_.
 
-`Unreleased`_
+`0.15.1_JoseWallbox`_
 =============
 
-* Fixed reading the battery level returns a zero-filled bytearray on linux with bluez >= 5.48 Fixes #750
+Fixed
+-------
+
+* Fixed disconnect raises an error when a reconnection has been made in Windows backend.
+
+`0.15.0_JoseWallbox`_
+=============
+
+Changed
+-------
+
+* Change device_information.
 
 `0.14.2`_ (2022-01-26)
 ======================

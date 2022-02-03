@@ -207,11 +207,9 @@ class BleakClientWinRT(BaseBleakClient):
 
             if self._requester:
                 self._requester.close()
-                self._requester = None
 
             if self._session:
                 self._session.close()
-                self._session = None
 
         def handle_session_status_changed(
             args: GattSessionStatusChangedEventArgs,
@@ -325,7 +323,6 @@ class BleakClientWinRT(BaseBleakClient):
             self._session_closed_events.append(event)
             try:
                 self._requester.close()
-                await asyncio.wait_for(event.wait(), timeout=10)
             finally:
                 self._session_closed_events.remove(event)
 

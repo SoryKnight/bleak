@@ -1,3 +1,3 @@
 # -*- coding: utf-8 -*-
 
-__version__ = "0.15.0_JoseWallbox"
+__version__ = "0.15.1_JoseWallbox"
