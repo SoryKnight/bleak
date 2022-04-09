@@ -171,17 +171,25 @@ class PeripheralDelegate(NSObject):
         # in CoreBluetooth there is no indication of success or failure of
         # CBCharacteristicWriteWithoutResponse
         if response == CBCharacteristicWriteWithResponse:
+            logger.debug("With response")
             future = self._event_loop.create_future()
-
-            self._characteristic_write_futures[characteristic.handle()] = future
-            try:
-                self.peripheral.writeValue_forCharacteristic_type_(
-                    value, characteristic, response
-                )
-                await future
-            finally:
-                del self._characteristic_write_futures[characteristic.handle()]
+            for i in range(10):
+                logger.debug(f"Trying to write characteristic {i}")
+                self._characteristic_write_futures[characteristic.handle()] = future
+                try:
+                    self.peripheral.writeValue_forCharacteristic_type_(
+                        value, characteristic, response
+                    )
+                    await future
+                    break
+                except:
+                    import time
+                    logger.error("Failing, try again")
+                    time.sleep(1)
+                finally:
+                    del self._characteristic_write_futures[characteristic.handle()]
         else:
+            logger.debug("Without response")
             self.peripheral.writeValue_forCharacteristic_type_(
                 value, characteristic, response
             )
