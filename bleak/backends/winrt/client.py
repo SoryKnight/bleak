@@ -369,6 +369,11 @@ class BleakClientWinRT(BaseBleakClient):
         finally:
             self._session_active_events.remove(event)
 
+        # This is done because in some devices get_services also tries to pair and a message is prompt in the OS.
+        # with this change we attempt to pair before services are resolved
+        force_pairing = kwargs.get("force_pairing", False)
+        if force_pairing is True:
+            await self.pair()
         # Obtain services, which also leads to connection being established.
         await self.get_services()
 
