@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "bleak"
-version = "0.17.1joseWallbox"
+version = "0.17.1+joseWBX"
 description = "Bluetooth Low Energy platform Agnostic Klient"
 authors = ["Henrik Blidh <henrik.blidh@nedomkull.com>"]
 license = "MIT"
