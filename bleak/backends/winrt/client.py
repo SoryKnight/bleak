@@ -177,6 +177,7 @@ class BleakClientWinRT(BaseBleakClient):
         self._session_active_events: List[asyncio.Event] = []
         self._session_closed_events: List[asyncio.Event] = []
         self._session: GattSession = None
+        self._ignore_disconection_event: bool = False
         self._notification_callbacks: Dict[int, NotifyCallback] = {}
 
         if "address_type" in kwargs:
@@ -307,8 +308,11 @@ class BleakClientWinRT(BaseBleakClient):
 
                 for e in self._session_closed_events:
                     e.set()
-
-                handle_disconnect()
+                logger.debug(
+                    "handling disconnection, why?",
+                )
+                if not self._ignore_disconection_event:
+                    handle_disconnect()
 
         # this is the WinRT event handler will be called on another thread
         def session_status_changed_event_handler(
@@ -373,10 +377,21 @@ class BleakClientWinRT(BaseBleakClient):
         # with this change we attempt to pair before services are resolved
         force_pairing = kwargs.get("force_pairing", False)
         if force_pairing is True:
-            await self.pair()
+            self._ignore_disconection_event = True
+            attempt = 1
+            while attempt < 10:
+                try:
+                    await self.pair()
+                    logger.debug("Paired, getting services")
+                    break
+                except BleakError as e:
+                    logger.debug(f"Trying to pair again as {e}")
+                    await asyncio.sleep(1)
+                    attempt += 1
+
         # Obtain services, which also leads to connection being established.
         await self.get_services()
-
+        self._ignore_disconection_event = False
         return True
 
     async def disconnect(self) -> bool:
@@ -388,23 +403,26 @@ class BleakClientWinRT(BaseBleakClient):
         """
         logger.debug("Disconnecting from BLE device...")
         # Remove notifications.
+        logger.debug("Remove notifications")
         for handle, event_handler_token in list(self._notification_callbacks.items()):
             char = self.services.get_characteristic(handle)
             char.obj.remove_value_changed(event_handler_token)
         self._notification_callbacks.clear()
 
+        logger.debug("Dispose all service components that we have requested and created")
         # Dispose all service components that we have requested and created.
         for service in self.services:
             service.obj.close()
         self.services = BleakGATTServiceCollection()
         self._services_resolved = False
-
+        logger.debug("Without this, disposing the BluetoothLEDevice won't disconnect it")
         # Without this, disposing the BluetoothLEDevice won't disconnect it
         if self._session:
             self._session.maintain_connection = False
             # calling self._session.close() here prevents any further GATT
             # session status events, so we defer that until after the session
             # is no longer active
+        logger.debug("Dispose of the BluetoothLEDevice and see that the session")
 
         # Dispose of the BluetoothLEDevice and see that the session
         # status is now closed.
@@ -412,11 +430,14 @@ class BleakClientWinRT(BaseBleakClient):
             event = asyncio.Event()
             self._session_closed_events.append(event)
             try:
+                logger.debug("requester close")
                 self._requester.close()
                 # sometimes it can take over one minute before Windows decides
                 # to end the GATT session/disconnect the device
-                async with async_timeout.timeout(120):
+                async with async_timeout.timeout(10):
                     await event.wait()
+            except Exception as e:
+                logger.warning(f"Timeout reached when trying to unpair, ignoring it: {e}")
             finally:
                 self._session_closed_events.remove(event)
 
