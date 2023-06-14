@@ -412,7 +412,10 @@ class BleakClientWinRT(BaseBleakClient):
         logger.debug("Dispose all service components that we have requested and created")
         # Dispose all service components that we have requested and created.
         for service in self.services:
-            service.obj.close()
+            try:
+                await asyncio.wait_for(asyncio.to_thread(service.obj.close), timeout=5)
+            except asyncio.TimeoutError:
+                logger.warning(f"Timeout when trying to close service --> {str(service)}. Ignoring it and continue")
         self.services = BleakGATTServiceCollection()
         self._services_resolved = False
         logger.debug("Without this, disposing the BluetoothLEDevice won't disconnect it")
