@@ -409,13 +409,14 @@ class BleakClientWinRT(BaseBleakClient):
             char.obj.remove_value_changed(event_handler_token)
         self._notification_callbacks.clear()
 
-        logger.debug("Dispose all service components that we have requested and created")
-        # Dispose all service components that we have requested and created.
-        for service in self.services:
-            try:
-                await asyncio.wait_for(asyncio.to_thread(service.obj.close), timeout=5)
-            except asyncio.TimeoutError:
-                logger.warning(f"Timeout when trying to close service --> {str(service)}. Ignoring it and continue")
+        logger.debug("Ignoring the closing of services due to the issue appeared with Energy Star")
+        # Dispose all service components that we have requested and created. Ignoring the closing of services
+        # due to the issue appeared with Energy Star
+        # for service in self.services:
+        #     try:
+        #         await asyncio.wait_for(asyncio.to_thread(service.obj.close), timeout=5)
+        #     except asyncio.TimeoutError:
+        #         logger.warning(f"Timeout when trying to close service --> {str(service)}. Ignoring it and continue")
         self.services = BleakGATTServiceCollection()
         self._services_resolved = False
         logger.debug("Without this, disposing the BluetoothLEDevice won't disconnect it")
